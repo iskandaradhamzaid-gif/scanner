@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audit Aset - Scanner Barkod</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, Roboto, Arial, sans-serif;
+      background: #f2f4f7;
+      margin: 0;
+      padding: 16px;
+      color: #1a1a1a;
+    }
+    h2 { text-align: center; margin: 8px 0 16px; font-size: 20px; }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    #reader { width: 100%; border-radius: 8px; overflow: hidden; }
+    button {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #captureBtn { margin-top: 8px; }
+    #manualBtn { background: #e5e7eb; color: #1a1a1a; margin-top: 8px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; color: #444; }
+    input[type=text], select, textarea {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 15px;
+      background: #f9fafb;
+    }
+    input[readonly] { background: #eef1f5; color: #555; }
+    textarea { resize: vertical; min-height: 60px; }
+    #submitBtn { background: #16a34a; color: #fff; margin-top: 16px; }
+    #submitBtn:disabled { background: #9ca3af; }
+    .status-msg {
+      text-align: center;
+      padding: 10px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .status-found { background: #dcfce7; color: #166534; }
+    .status-notfound { background: #fee2e2; color: #991b1b; }
+    .status-success { background: #dbeafe; color: #1e40af; }
+    #formSection { display: none; }
+    .hint { font-size: 12px; color: #777; text-align: center; margin-top: 4px; }
+    .autocomplete-wrap { position: relative; }
+    .suggestions {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: #fff;
+      border: 1px solid #d1d5db;
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+      max-height: 180px;
+      overflow-y: auto;
+      z-index: 10;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    .suggestions div {
+      padding: 10px;
+      font-size: 14px;
+      border-bottom: 1px solid #f0f0f0;
+      cursor: pointer;
+    }
+    .suggestions div:hover { background: #eef2ff; }
+    .suggestions .no-match { color: #999; font-style: italic; cursor: default; }
+    #configWarning {
+      display: none;
+      background: #fef3c7;
+      color: #92400e;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>📷 Audit Aset - Imbas Barkod</h2>
+
+  <div id="configWarning">
+    ⚠️ <b>APPS_SCRIPT_URL</b> belum ditetapkan. Buka fail ini dengan editor teks,
+    cari baris <code>const APPS_SCRIPT_URL = ...</code> di bahagian atas skrip,
+    dan gantikan dengan URL deployment Apps Script awak (berakhir dengan <code>/exec</code>).
+  </div>
+
+  <div class="card">
+    <div id="reader" style="display:none;"></div>
+    <div id="zoomControl" style="display:none; margin-top:10px;">
+      <label style="margin:0 0 4px;">🔍 Zoom Kamera</label>
+      <input type="range" id="zoomSlider" min="1" max="5" step="0.1" value="1" oninput="setZoom(this.value)">
+    </div>
+    <button id="torchBtn" style="display:none; background:#f59e0b; color:#fff; margin-top:8px;" onclick="toggleTorch()">🔦 Lampu Suluh: OFF</button>
+    <div id="liveScanHint" class="hint" style="display:none;">💡 Pastikan pencahayaan cukup, pegang telefon stabil ~10-15cm dari barkod, dan barkod mengisi penuh kotak imbasan</div>
+    <button id="scanBtn" onclick="toggleLiveScan()">📷 Imbas Barkod (Kamera Live)</button>
+    <button id="captureBtn" onclick="triggerNativeCapture()" style="background:#7c3aed; color:#fff; margin-top:8px;">📸 Ambil Gambar Barkod</button>
+    <button id="manualBtn" onclick="manualEntry()" style="margin-top:8px;">⌨️ Masukkan Barkod Manual</button>
+    <input type="file" id="nativeCaptureInput" accept="image/*" capture="environment" style="display:none;" onchange="handleNativeCapture(event)">
+  </div>
+
+  <div id="msgBox"></div>
+
+  <div class="card" id="formSection">
+    <label>Barkod</label>
+    <input type="text" id="barkod" readonly>
+
+    <label>Nama Asset</label>
+    <input type="text" id="namaAsset" readonly>
+
+    <label>Nama Pemilik</label>
+    <input type="text" id="namaPemilik" readonly>
+
+    <label>Jabatan</label>
+    <input type="text" id="jabatan" readonly>
+
+    <label>Status Semakan *</label>
+    <select id="statusSemakan">
+      <option value="">-- Pilih Status --</option>
+      <option value="BAIK">BAIK</option>
+      <option value="ROSAK">ROSAK</option>
+    </select>
+
+    <label>Lokasi Semakan *</label>
+    <div class="autocomplete-wrap">
+      <input type="text" id="lokasiSemakan" placeholder="Taip untuk cari lokasi..." autocomplete="off">
+      <div id="lokasiSuggestions" class="suggestions"></div>
+    </div>
+
+    <label id="catatanLabel">Catatan</label>
+    <textarea id="catatan" placeholder="Catatan tambahan (jika ada)"></textarea>
+
+    <button id="submitBtn" onclick="submitForm()">Simpan Rekod Semakan</button>
+  </div>
+
+  <script>
+    // =====================================================================
+    // PENTING: Gantikan URL di bawah dengan URL deployment Apps Script awak.
+    // Contoh: https://script.google.com/macros/s/AKfycb.../exec
+    // =====================================================================
+    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxfc-igc5MMLT3Ksm9x4cOycuQB6fWOwvFGnXAwYvDZMbzmozWin6cbW3WC9nf0cEuWUw/exec';
+
+    let libraryLoaded = false;
+    let lokasiOptions = [];
+
+    if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_URL') !== -1) {
+      document.getElementById('configWarning').style.display = 'block';
+    }
+
+    // ---------- Muat senarai lokasi bila page dibuka ----------
+    window.addEventListener('load', async () => {
+      try {
+        const res = await fetch(APPS_SCRIPT_URL + '?action=lokasi');
+        lokasiOptions = await res.json();
+      } catch (e) {
+        console.error('Gagal muat senarai lokasi:', e);
+      }
+    });
+
+    function renderLokasiSuggestions(filterText) {
+      const box = document.getElementById('lokasiSuggestions');
+      const filtered = lokasiOptions.filter(loc =>
+        loc.toLowerCase().includes(filterText.toLowerCase())
+      );
+
+      if (filterText.trim() === '') {
+        box.style.display = 'none';
+        box.innerHTML = '';
+        return;
+      }
+
+      if (filtered.length === 0) {
+        box.innerHTML = '<div class="no-match">Tiada padanan — anda boleh taip lokasi baru</div>';
+        box.style.display = 'block';
+        return;
+      }
+
+      box.innerHTML = filtered.slice(0, 30).map(loc =>
+        '<div onclick="selectLokasi(\'' + loc.replace(/'/g, "\\'") + '\')">' + loc + '</div>'
+      ).join('');
+      box.style.display = 'block';
+    }
+
+    function selectLokasi(loc) {
+      document.getElementById('lokasiSemakan').value = loc;
+      document.getElementById('lokasiSuggestions').style.display = 'none';
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const lokasiInput = document.getElementById('lokasiSemakan');
+      lokasiInput.addEventListener('input', (e) => renderLokasiSuggestions(e.target.value));
+      lokasiInput.addEventListener('focus', (e) => {
+        if (e.target.value.trim() !== '') renderLokasiSuggestions(e.target.value);
+      });
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.autocomplete-wrap')) {
+          document.getElementById('lokasiSuggestions').style.display = 'none';
+        }
+      });
+    });
+
+    // ---------- Library QR/Barcode scanner (dengan fallback CDN) ----------
+    const CDN_URLS = [
+      'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js',
+      'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js',
+      'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js'
+    ];
+
+    function loadScript(url) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = url;
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error('Gagal muat: ' + url));
+        document.head.appendChild(s);
+      });
+    }
+
+    async function ensureLibraryLoaded() {
+      if (libraryLoaded) return true;
+      if (typeof Html5Qrcode !== 'undefined') { libraryLoaded = true; return true; }
+      for (const url of CDN_URLS) {
+        try {
+          await loadScript(url);
+          if (typeof Html5Qrcode !== 'undefined') { libraryLoaded = true; return true; }
+        } catch (e) { /* cuba CDN seterusnya */ }
+      }
+      return false;
+    }
+
+    function showMsg(text, type) {
+      document.getElementById('msgBox').innerHTML =
+        '<div class="status-msg status-' + type + '">' + text + '</div>';
+    }
+
+    function clearMsg() {
+      document.getElementById('msgBox').innerHTML = '';
+    }
+
+    // ---------- Imbas Barkod (Kamera Live) ----------
+    let html5QrCode;
+    let scanning = false;
+    let torchOn = false;
+
+    async function toggleLiveScan() {
+      if (scanning) {
+        stopScanner();
+      } else {
+        startScanner();
+      }
+    }
+
+    async function startScanner() {
+      clearMsg();
+      showMsg('Menyediakan pengimbas...', 'success');
+
+      const ok = await ensureLibraryLoaded();
+      if (!ok) {
+        showMsg('Gagal memuatkan library pengimbas barkod. Semak sambungan internet, atau guna "Ambil Gambar"/"Masukkan Barkod Manual".', 'notfound');
+        return;
+      }
+
+      document.getElementById('reader').style.display = 'block';
+      document.getElementById('liveScanHint').style.display = 'block';
+      document.getElementById('scanBtn').innerText = '⏹ Henti Kamera';
+      clearMsg();
+
+      html5QrCode = new Html5Qrcode("reader");
+      const config = {
+        fps: 15,
+        qrbox: { width: 280, height: 140 },
+        aspectRatio: 1.5,
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.CODE_93,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.ITF,
+          Html5QrcodeSupportedFormats.CODABAR,
+          Html5QrcodeSupportedFormats.QR_CODE
+        ],
+        experimentalFeatures: {
+          useBarCodeDetectorIfSupported: true
+        }
+      };
+
+      const videoConstraints = {
+        facingMode: "environment",
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        advanced: [{ focusMode: "continuous" }]
+      };
+
+      html5QrCode.start(
+        videoConstraints,
+        config,
+        (decodedText) => { onBarcodeScanned(decodedText); },
+        (errorMessage) => { /* diam-diam ignore frame tanpa barkod */ }
+      ).then(() => {
+        scanning = true;
+        setupCameraCapabilities();
+      }).catch((err) => {
+        document.getElementById('reader').style.display = 'none';
+        document.getElementById('liveScanHint').style.display = 'none';
+        document.getElementById('scanBtn').innerText = '📷 Imbas Barkod (Kamera Live)';
+
+        const errStr = String(err);
+        let msg = 'Gagal buka kamera: ' + err;
+        if (errStr.includes('NotAllowedError')) {
+          msg = '🚫 Akses kamera ditolak. Semak Permissions Camera untuk laman ini dalam tetapan browser, kemudian cuba lagi.';
+        } else if (errStr.includes('NotFoundError')) {
+          msg = '📷 Tiada kamera dikesan pada peranti ini.';
+        } else if (errStr.includes('NotReadableError')) {
+          msg = '⚠️ Kamera sedang digunakan oleh app lain. Tutup app/tab lain, cuba lagi.';
+        } else if (errStr.includes('OverconstrainedError')) {
+          msg = '⚠️ Kamera belakang tidak dijumpai. Cuba peranti lain.';
+        }
+        showMsg(msg, 'notfound');
+      });
+    }
+
+    function stopScanner() {
+      if (html5QrCode && scanning) {
+        html5QrCode.stop().then(() => {
+          scanning = false;
+          document.getElementById('reader').style.display = 'none';
+          document.getElementById('liveScanHint').style.display = 'none';
+          document.getElementById('scanBtn').innerText = '📷 Imbas Barkod (Kamera Live)';
+          document.getElementById('zoomControl').style.display = 'none';
+          document.getElementById('torchBtn').style.display = 'none';
+          torchOn = false;
+        });
+      }
+    }
+
+    function setupCameraCapabilities() {
+      try {
+        const capabilities = html5QrCode.getRunningTrackCapabilities();
+
+        if (capabilities && capabilities.zoom) {
+          const slider = document.getElementById('zoomSlider');
+          slider.min = capabilities.zoom.min || 1;
+          slider.max = capabilities.zoom.max || 5;
+          slider.step = capabilities.zoom.step || 0.1;
+          slider.value = capabilities.zoom.min || 1;
+          document.getElementById('zoomControl').style.display = 'block';
+        }
+
+        if (capabilities && capabilities.torch) {
+          document.getElementById('torchBtn').style.display = 'block';
+        }
+      } catch (e) {
+        console.log('Capability zoom/torch tidak disokong pada peranti ini:', e);
+      }
+    }
+
+    function setZoom(value) {
+      if (!html5QrCode || !scanning) return;
+      html5QrCode.applyVideoConstraints({
+        advanced: [{ zoom: parseFloat(value) }]
+      }).catch((e) => console.log('Zoom gagal:', e));
+    }
+
+    function toggleTorch() {
+      if (!html5QrCode || !scanning) return;
+      torchOn = !torchOn;
+      html5QrCode.applyVideoConstraints({
+        advanced: [{ torch: torchOn }]
+      }).then(() => {
+        document.getElementById('torchBtn').innerText = '🔦 Lampu Suluh: ' + (torchOn ? 'ON' : 'OFF');
+      }).catch((e) => {
+        console.log('Torch gagal:', e);
+        torchOn = !torchOn;
+      });
+    }
+
+    // ---------- Fallback: ambil gambar guna kamera native, decode dari fail ----------
+    function triggerNativeCapture() {
+      document.getElementById('nativeCaptureInput').click();
+    }
+
+    // ---------- Strategi 1: Native BarcodeDetector API (paling tepat, kalau disokong) ----------
+    async function tryNativeBarcodeDetector(file) {
+      if (!('BarcodeDetector' in window)) return null;
+      try {
+        const formats = await BarcodeDetector.getSupportedFormats();
+        const detector = new BarcodeDetector({ formats });
+        const bitmap = await createImageBitmap(file);
+        const barcodes = await detector.detect(bitmap);
+        if (barcodes && barcodes.length > 0) {
+          return barcodes[0].rawValue;
+        }
+      } catch (e) {
+        console.log('Native BarcodeDetector gagal/tidak disokong:', e);
+      }
+      return null;
+    }
+
+    // ---------- Strategi 2: Tingkatkan kontras + upscale imej sebelum decode ----------
+    function enhanceImageForScan(file) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const scale = 2;
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width * scale;
+          canvas.height = img.height * scale;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imgData.data;
+          for (let i = 0; i < data.length; i += 4) {
+            const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            let contrasted = (gray - 128) * 1.6 + 128;
+            contrasted = Math.max(0, Math.min(255, contrasted));
+            data[i] = data[i + 1] = data[i + 2] = contrasted;
+          }
+          ctx.putImageData(imgData, 0, 0);
+          canvas.toBlob((blob) => resolve(blob), 'image/png');
+        };
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    async function handleNativeCapture(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      clearMsg();
+      showMsg('Memproses gambar...', 'success');
+
+      // Strategi 1: cuba native BarcodeDetector browser (paling tepat & pantas)
+      const nativeResult = await tryNativeBarcodeDetector(file);
+      if (nativeResult) {
+        onBarcodeScanned(nativeResult);
+        event.target.value = '';
+        return;
+      }
+
+      // Strategi 2: html5-qrcode pada gambar asal
+      const ok = await ensureLibraryLoaded();
+      if (!ok) {
+        showMsg('Gagal memuatkan library pengimbas barkod. Semak sambungan internet, atau guna "Masukkan Barkod Manual".', 'notfound');
+        event.target.value = '';
+        return;
+      }
+
+      try {
+        const scanner1 = new Html5Qrcode("reader");
+        const decodedText = await scanner1.scanFile(file, false);
+        onBarcodeScanned(decodedText);
+        event.target.value = '';
+        return;
+      } catch (e) {
+        console.log('Decode gambar asal gagal, cuba tingkatkan kontras...');
+      }
+
+      // Strategi 3: tingkatkan kontras + upscale, cuba decode semula
+      try {
+        showMsg('Menambah baik kualiti gambar, cuba lagi...', 'success');
+        const enhancedBlob = await enhanceImageForScan(file);
+        const scanner2 = new Html5Qrcode("reader");
+        const decodedText2 = await scanner2.scanFile(enhancedBlob, false);
+        onBarcodeScanned(decodedText2);
+      } catch (e2) {
+        showMsg('❌ Tidak dapat mengesan barkod dari gambar. Cuba: pencahayaan lebih terang, barkod diisi penuh dalam frame, elak bayang, atau guna "Masukkan Barkod Manual".', 'notfound');
+      }
+
+      event.target.value = '';
+    }
+
+    function manualEntry() {
+      const code = prompt('Masukkan nombor barkod:');
+      if (code && code.trim() !== '') {
+        onBarcodeScanned(code.trim());
+      }
+    }
+
+    async function onBarcodeScanned(code) {
+      stopScanner();
+      clearMsg();
+      showMsg('Mencari barkod: ' + code + ' ...', 'success');
+
+      try {
+        const res = await fetch(APPS_SCRIPT_URL + '?action=lookup&barkod=' + encodeURIComponent(code));
+        const result = await res.json();
+        onLookupResult(result);
+      } catch (e) {
+        showMsg('Ralat sambungan ke server: ' + e.message, 'notfound');
+      }
+    }
+
+    let notFoundMode = false;
+
+    function onLookupResult(result) {
+      const namaAssetInput = document.getElementById('namaAsset');
+      const namaPemilikInput = document.getElementById('namaPemilik');
+      const jabatanInput = document.getElementById('jabatan');
+      const catatanInput = document.getElementById('catatan');
+
+      document.getElementById('barkod').value = result.barkod;
+      document.getElementById('statusSemakan').value = '';
+      document.getElementById('lokasiSemakan').value = '';
+      catatanInput.value = '';
+
+      if (result.found) {
+        notFoundMode = false;
+        namaAssetInput.value = result.namaAsset;
+        namaPemilikInput.value = result.namaPemilik;
+        jabatanInput.value = result.jabatan;
+        namaAssetInput.readOnly = true;
+        namaPemilikInput.readOnly = true;
+        jabatanInput.readOnly = true;
+        catatanInput.placeholder = 'Catatan tambahan (jika ada)';
+        document.getElementById('catatanLabel').innerText = 'Catatan';
+        document.getElementById('formSection').style.display = 'block';
+        showMsg('✅ Barkod dijumpai: ' + result.namaAsset, 'found');
+      } else {
+        notFoundMode = true;
+        namaAssetInput.value = '';
+        namaPemilikInput.value = '';
+        jabatanInput.value = '';
+        namaAssetInput.readOnly = false;
+        namaPemilikInput.readOnly = false;
+        jabatanInput.readOnly = false;
+        catatanInput.placeholder = 'WAJIB: catatkan maklumat asset ini (nama, pemilik, jabatan, dll)';
+        document.getElementById('catatanLabel').innerText = 'Catatan *';
+        document.getElementById('formSection').style.display = 'block';
+        showMsg('❌ Barkod "' + result.barkod + '" tidak dijumpai dalam ASSET_MASTER. Sila isi maklumat secara manual dan wajib isi Catatan.', 'notfound');
+      }
+    }
+
+    async function submitForm() {
+      const statusSemakan = document.getElementById('statusSemakan').value;
+      const lokasiSemakan = document.getElementById('lokasiSemakan').value.trim();
+      const catatan = document.getElementById('catatan').value.trim();
+
+      if (!statusSemakan) { alert('Sila pilih Status Semakan (BAIK/ROSAK).'); return; }
+      if (!lokasiSemakan) { alert('Sila isi Lokasi Semakan.'); return; }
+      if (notFoundMode && !catatan) {
+        alert('Barkod ini tidak berdaftar dalam ASSET_MASTER. Sila isi Catatan (wajib) sebelum simpan.');
+        return;
+      }
+
+      const data = {
+        action: 'submit',
+        barkod: document.getElementById('barkod').value,
+        namaAsset: document.getElementById('namaAsset').value,
+        namaPemilik: document.getElementById('namaPemilik').value,
+        jabatan: document.getElementById('jabatan').value,
+        statusSemakan: statusSemakan,
+        lokasiSemakan: lokasiSemakan,
+        catatan: catatan
+      };
+
+      document.getElementById('submitBtn').disabled = true;
+      document.getElementById('submitBtn').innerText = 'Menyimpan...';
+
+      try {
+        // guna text/plain untuk elak CORS preflight yang tidak disokong Apps Script
+        const res = await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(data)
+        });
+        const result = await res.json();
+
+        if (result.success) {
+          showMsg('✅ Rekod semakan berjaya disimpan! Sedia untuk scan seterusnya.', 'success');
+          document.getElementById('formSection').style.display = 'none';
+          notFoundMode = false;
+        } else {
+          alert('Gagal simpan: ' + (result.error || 'ralat tidak diketahui'));
+        }
+      } catch (e) {
+        alert('Ralat sambungan: ' + e.message);
+      } finally {
+        document.getElementById('submitBtn').disabled = false;
+        document.getElementById('submitBtn').innerText = 'Simpan Rekod Semakan';
+      }
+    }
+  </script>
+</body>
+</html>
